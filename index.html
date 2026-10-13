@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crusoe Managed RL, Wordle</title>
+<style>
+/* Layout: one full-screen dark stage, composed at 1920 x 1080 and scaled to whatever window it
+   runs in (see fit() in the script). Four tabs, one idea per screen. Near-black ground, charcoal
+   panels, white lockup, Hi-Vis Yellow as the one accent. Wordle boards use the game's own dark
+   palette so they read as Wordle at a glance. */
+@font-face { font-family: "Diatype Mono"; src: url("assets/fonts/ABCDiatypeMono-Regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Diatype Mono"; src: url("assets/fonts/ABCDiatypeMono-Bold.woff2") format("woff2"); font-weight: 700; }
+@font-face { font-family: "Suisse Intl"; src: url("assets/fonts/SuisseIntl-Regular.otf") format("opentype"); font-weight: 400; }
+@font-face { font-family: "Suisse Intl"; src: url("assets/fonts/SuisseIntl-Medium.otf") format("opentype"); font-weight: 500; }
+@font-face { font-family: "Suisse Intl"; src: url("assets/fonts/SuisseIntl-Bold.otf") format("opentype"); font-weight: 700; }
+
+:root {
+  color-scheme: dark;
+  --bg: #0F1011; --panel: #1B1D1E; --line: #34373A; --ink: #FFFFFF; --muted: #BDBDBD; --dim: #8A8A8A;
+  --ground2: #232628; --cloud: #1C272C; --cloud-line: #3C5560; --track: #3A3D40;
+  --py-k: #C792EA; --py-f: #82AAFF;
+  --accent: #CEEB13; --accent-ink: #3E4A00; --teal: #395761; --slate: #7799B6; --gold: #CD881A; --green: #738564; --grey: #A3A3A3;
+  --w-bg: #121213; --w-g: #538D4E; --w-y: #B59F3B; --w-x: #3A3A3C; --w-line: #3A3A3C;
+  --font-display: "Diatype Mono", "Roboto Mono", monospace;
+  --font-body: "Suisse Intl", "Inter Tight", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+html { background: var(--bg); }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 20px; line-height: 1.4; display: flex; flex-direction: column; overflow: hidden; }
+body.nocursor, body.nocursor * { cursor: none !important; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+code { font-family: var(--font-display); }
+.eyebrow { font-family: var(--font-display); font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--slate); }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 400; margin: 0; text-wrap: balance; }
+h1 { font-size: 40px; line-height: 1.12; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+.chip { font-family: var(--font-display); font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent); padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+.hl { color: var(--accent); }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 24px; padding: 18px 56px; background: var(--panel); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.top img { height: 36px; display: block; }
+.top .product { font-family: var(--font-display); font-size: 22px; font-weight: 700; letter-spacing: .02em; padding-left: 24px; border-left: 1px solid var(--line); line-height: 1; display: flex; align-items: center; gap: 16px; }
+.tabs { margin-left: auto; display: flex; gap: 8px; }
+.tab { font-family: var(--font-display); font-size: 16px; letter-spacing: .06em; text-transform: uppercase; padding: 8px 18px 8px 8px; border-radius: 999px; color: var(--muted); display: inline-flex; align-items: center; gap: 12px; border: 2px solid transparent; }
+.tab .num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 15px; background: var(--tab); color: var(--tab-ink); }
+.tab:hover { color: var(--ink); border-color: var(--tab); }
+.tab[aria-selected="true"] { color: var(--tab-ink); background: var(--tab); }
+.tab[aria-selected="true"] .num { background: var(--tab-ink); color: var(--tab); }
+.tab[data-tab="play"]  { --tab: var(--accent); --tab-ink: #1B2000; }
+.tab[data-tab="how"]   { --tab: var(--slate);  --tab-ink: #0B1216; }
+.tab[data-tab="code"]  { --tab: var(--gold);   --tab-ink: #FFFFFF; }
+.tab[data-tab="start"] { --tab: var(--green);  --tab-ink: #FFFFFF; }
+.tab:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* stage */
+.stage { flex: 1 1 auto; min-height: 0; padding: 24px 56px 20px; display: none; overflow: hidden; position: relative; }
+.stage.active { display: grid; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 40px; }
+.head.center { justify-content: center; text-align: center; flex-direction: column; align-items: center; gap: 6px; }
+
+/* watch: hero, three boards, the two training charts, all on one screen */
+#play { grid-template-columns: 420px minmax(0, 1fr); gap: 40px; }
+.hero { display: grid; align-content: center; gap: 24px; position: relative; }
+.hero h1 { font-size: 46px; line-height: 1.1; }
+.race { display: grid; gap: 12px; }
+.race .eyebrow { font-size: 13px; }
+.rrow { display: grid; grid-template-columns: 118px 1fr 72px; align-items: center; gap: 14px; font-family: var(--font-display); font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); transition: opacity .4s; }
+.rrow .tiles { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.rrow .tiles i { display: block; aspect-ratio: 1; border-radius: 2px; background: var(--w-bg); border: 2px solid var(--w-line); transition: background .3s, border-color .3s; }
+.rrow .tiles i.G { background: var(--w-g); border-color: var(--w-g); } .rrow .tiles i.Y { background: var(--w-y); border-color: var(--w-y); }
+.rrow b { font-size: 24px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.rrow.rl b { color: var(--accent); }
+.rrow.off { opacity: .35; }
+.rnote { font-family: var(--font-display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--slate); min-height: 1.4em; }
+.arena { display: grid; grid-template-rows: auto minmax(0, 1.25fr) auto minmax(0, 1fr); gap: 12px; min-height: 0; }
+.now { display: flex; align-items: baseline; gap: 22px; font-family: var(--font-display); }
+.now .k { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--slate); }
+.now .w { font-size: 40px; font-weight: 700; letter-spacing: .28em; text-transform: uppercase; line-height: 1; }
+.readout-row { display: grid; place-items: center; }
+.readout { font-family: var(--font-display); font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent); padding: 6px 16px; border-radius: 999px; white-space: nowrap; }
+.boards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; min-height: 0; padding-top: 34px; }
+.board { padding: 14px 20px 12px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; position: relative; background: var(--w-bg); border: 1px solid var(--w-line); border-radius: 16px; }
+.board .who { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.board .who h2 { font-size: 19px; letter-spacing: .04em; text-transform: uppercase; color: #fff; }
+.board .who span { font-family: var(--font-display); font-size: 12px; color: #818384; white-space: nowrap; letter-spacing: .04em; text-transform: uppercase; }
+.board.rl { border: 2px solid var(--accent); }
+.badge { position: absolute; top: -34px; left: 0; right: 0; text-align: center; font-family: var(--font-display); font-size: 13px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; color: #fff; }
+.badge span { display: inline-block; background: var(--gold); padding: 6px 18px; border-radius: 999px 999px 0 0; }
+.board.won { border-color: var(--w-g); box-shadow: 0 0 0 3px rgba(83, 141, 78, .55), 0 0 40px rgba(83, 141, 78, .5); animation: boardflash 1.6s ease-out; }
+@keyframes boardflash { 0% { background: var(--w-g); transform: scale(1.03); } 25% { background: var(--w-bg); transform: scale(1); } 45% { background: var(--w-g); } 70% { background: var(--w-bg); } }
+.grid { display: grid; grid-template-rows: repeat(6, 1fr); gap: 6px; align-self: center; height: 100%; aspect-ratio: 5 / 6; margin: 0 auto; }
+.row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.tile { display: grid; place-items: center; border-radius: 2px; font-family: var(--font-display); font-weight: 700; font-size: 26px; text-transform: uppercase; background: var(--w-bg); border: 2px solid var(--w-line); color: #fff; transition: background .2s ease, border-color .2s ease; }
+.tile.G { background: var(--w-g); border-color: var(--w-g); }
+.tile.Y { background: var(--w-y); border-color: var(--w-y); }
+.tile.X { background: var(--w-x); border-color: var(--w-x); }
+.outcome { font-family: var(--font-display); font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: #818384; text-align: center; padding: 6px 0; border-radius: 6px; min-height: 2em; }
+.outcome.won { color: #fff; background: var(--w-g); }
+.strip { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; min-height: 0; }
+.strip .chart { padding: 14px 20px 12px; }
+.strip .chart h2 { font-size: 16px; }
+.strip .chart .sub { font-size: 13px; }
+.strip .legend { font-size: 12px; gap: 16px; }
+
+/* charts */
+.chart { padding: 22px 28px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; min-height: 0; }
+.chart .bar-head { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }
+.chart h2 { font-size: 20px; letter-spacing: .04em; text-transform: uppercase; }
+.chart .sub { font-size: 15px; color: var(--dim); font-family: var(--font-display); }
+.chart svg { width: 100%; height: 100%; display: block; font-family: var(--font-display); }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--dim); font-size: 13px; }
+.chart .lbl { fill: var(--muted); font-size: 13px; letter-spacing: .06em; }
+.chart .loss { fill: none; stroke: var(--gold); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.chart .win { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart .rew { fill: none; stroke: var(--slate); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { fill: var(--panel); stroke: var(--accent); stroke-width: 3; }
+.chart .dot.rew { stroke: var(--slate); }
+.chart .val { fill: var(--ink); font-size: 15px; font-weight: 700; }
+.chart .val.win { fill: var(--accent); stroke: none; } .chart .val.rew { fill: var(--slate); stroke: none; }
+.chart .band { fill: rgba(255, 255, 255, .035); }
+.chart .bandlbl { fill: var(--dim); font-size: 11px; letter-spacing: .1em; }
+.legend { display: flex; gap: 22px; font-family: var(--font-display); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.legend i { display: inline-block; width: 22px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 8px; }
+
+/* diagrams shared */
+.diagram, .flowart { min-height: 0; display: grid; place-items: center; }
+.diagram svg, .flowart svg { width: 100%; height: 100%; max-height: 100%; display: block; font-family: var(--font-body); }
+@keyframes flow { to { stroke-dashoffset: -46; } }
+
+/* how to train: built one component at a time, in the order the data flows */
+#how { grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+.diagram .t-eyebrow { font-family: var(--font-display); font-size: 15px; letter-spacing: .14em; text-transform: uppercase; fill: var(--slate); }
+.diagram .t-tab { font-family: var(--font-display); font-size: 15px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; fill: #fff; }
+.diagram .t-title { font-family: var(--font-display); font-size: 30px; font-weight: 700; fill: var(--ink); }
+.diagram .t-name { font-family: var(--font-display); font-size: 24px; font-weight: 700; fill: var(--ink); }
+.diagram .t-code { font-family: var(--font-display); font-size: 18px; fill: var(--ink); white-space: pre; }
+.diagram .t-code .kw { fill: var(--py-k); font-weight: 700; }
+.diagram .t-code .fn { fill: var(--py-f); }
+.diagram .t-call { font-family: var(--font-display); font-size: 15px; fill: var(--ink); font-weight: 700; }
+.diagram .t-small { font-family: var(--font-display); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.diagram .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.diagram .box.strong { stroke: var(--ink); stroke-width: 2.5; }
+.diagram .ground { fill: var(--ground2); stroke: var(--line); stroke-width: 1.5; }
+.diagram .ground.cloud { fill: var(--cloud); stroke: var(--cloud-line); }
+.diagram .tab-bg { fill: var(--gold); } .diagram .tab-bg.cloud { fill: var(--slate); }
+.diagram .box.accent { fill: var(--accent); stroke: var(--accent); }
+.diagram .arrow { fill: none; stroke: var(--ink); stroke-width: 3; marker-end: url(#arr); }
+.diagram .arrow.back { stroke: var(--slate); stroke-dasharray: 8 8; marker-end: url(#arr-slate); }
+.diagram .icon { fill: none; stroke: var(--slate); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+.diagram .nb { fill: var(--ink); } .diagram .nt { font-family: var(--font-display); font-size: 17px; font-weight: 700; fill: var(--panel); }
+.diagram g.on > rect.box { stroke: var(--accent); stroke-width: 3.5; fill: #2C3A00; }
+.diagram g.on > .nb { fill: var(--accent); } .diagram g.on > .nt { fill: #000; }
+.diagram g.pill.on > rect.box { fill: var(--accent); stroke: #fff; stroke-width: 3; }
+.diagram rect.box, .diagram path.arrow, .diagram .hlr { transition: fill .35s ease, stroke .35s ease, opacity .35s ease; }
+.diagram .rv.in path.arrow { stroke-dasharray: 12 9; animation: flow 1.2s linear infinite; }
+.diagram .rv.in path.arrow.back { stroke-dasharray: 8 8; }
+.diagram path.arrow.on { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 14 9; animation: flow .7s linear infinite; marker-end: url(#arr-on); }
+.diagram #d-gpus > rect.box, .diagram #d-gpus.on > rect.box { fill: #14211A; stroke: url(#gpu-ring); stroke-width: 3.5; }
+.diagram #d-gpus { animation: gpu-glow 2.6s ease-in-out infinite; }
+@keyframes gpu-glow { 0%, 100% { filter: drop-shadow(0 0 4px rgba(83, 141, 78, .35)); } 50% { filter: drop-shadow(0 0 16px rgba(206, 235, 19, .35)); } }
+.diagram .pwr { fill: none; stroke: var(--w-g); stroke-width: 3; stroke-dasharray: 3 7; stroke-linecap: round; animation: flow 1.6s linear infinite reverse; }
+.diagram .pwr-dot { fill: var(--w-g); }
+.diagram .hlr { fill: #3E4A00; opacity: 0; }
+.diagram .hlr.on { opacity: 1; }
+.diagram .rv { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+.diagram .rv.in { opacity: 1; transform: none; }
+.diagram .mini rect { fill: var(--w-x); animation: tilein 2.4s ease-in-out infinite; }
+.diagram .mini rect.g { fill: var(--w-g); } .diagram .mini rect.y { fill: var(--w-y); }
+.diagram .mini rect:nth-child(3n+2) { animation-delay: .3s; } .diagram .mini rect:nth-child(3n+3) { animation-delay: .6s; }
+@keyframes tilein { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.diagram .loss-icon { stroke: var(--gold); stroke-width: 3; stroke-dasharray: 140; animation: draw 2.4s ease-in-out infinite; }
+@keyframes draw { 0% { stroke-dashoffset: 140; } 60%, 100% { stroke-dashoffset: 0; } }
+.diagram .gpu-dot { fill: var(--accent); animation: blink 1.6s ease-in-out infinite; }
+.diagram .gpu-dot:nth-of-type(2) { animation-delay: .4s; } .diagram .gpu-dot:nth-of-type(3) { animation-delay: .8s; } .diagram .gpu-dot:nth-of-type(4) { animation-delay: 1.2s; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .15; } }
+.diagram .ckpt-icon { transform-box: fill-box; transform-origin: center; animation: breathe 3s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+.diagram .typing { animation: blinkcursor 1s steps(1) infinite; }
+@keyframes blinkcursor { 50% { opacity: 0; } }
+
+/* grpo under the hood: six illustrated stations on a loop */
+#code { grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+.wherekey { display: flex; gap: 14px; justify-content: center; margin-top: 4px; }
+.wherekey .k { font-family: var(--font-display); font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #0B0C0D; padding: 6px 16px; border-radius: 999px; }
+.wherekey .k.local { background: var(--gold); } .wherekey .k.cloud { background: var(--slate); }
+.flowart .st-bg { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; transition: stroke .35s ease, fill .35s ease; }
+.flowart .st-bg.cloud { fill: var(--cloud); stroke: var(--cloud-line); }
+.flowart .st-bg.local { stroke: rgba(205, 136, 26, .45); }
+.flowart .st-crusoe { fill: var(--slate); stroke: var(--bg); stroke-width: 4; }
+.flowart .st-band.local { fill: var(--gold); } .flowart .st-band.cloud { fill: var(--slate); }
+.flowart .st-owner { font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; fill: #0B0C0D; }
+.flowart g.on .st-bg { stroke: var(--accent); stroke-width: 3.5; }
+.flowart .st-n { fill: var(--ink); } .flowart .st-nt { font-family: var(--font-display); font-size: 18px; font-weight: 700; fill: var(--panel); }
+.flowart g.on .st-n { fill: var(--accent); }
+.flowart .st-title { font-family: var(--font-display); font-size: 27px; font-weight: 700; fill: var(--ink); }
+.flowart .st-desc { font-size: 16.5px; fill: var(--muted); }
+.flowart .st-call { font-family: var(--font-display); font-size: 14px; font-weight: 700; fill: var(--accent); }
+.flowart .st-small { font-family: var(--font-display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; fill: var(--dim); }
+.flowart .st-val { font-family: var(--font-display); font-size: 12px; fill: var(--ink); }
+.flowart .gs { opacity: 0; transition: opacity .7s ease; }
+.flowart .gs.in { opacity: 1; }
+.flowart .arrow { fill: none; stroke: #6B7174; stroke-width: 4; stroke-dasharray: 16 10; animation: flow 1.2s linear infinite; marker-end: url(#farr); }
+.flowart .arrow.on { stroke: var(--accent); stroke-width: 5; animation-duration: .7s; marker-end: url(#farr-on); }
+.flowart .alabel { font-family: var(--font-display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; fill: var(--muted); }
+.flowart .wchip { fill: var(--w-bg); stroke: var(--w-line); }
+.flowart .wtxt { font-family: var(--font-display); font-size: 14px; font-weight: 700; fill: #fff; letter-spacing: .12em; text-transform: uppercase; }
+.flowart .tG { fill: var(--w-g); } .flowart .tY { fill: var(--w-y); } .flowart .tX { fill: var(--w-x); }
+.flowart .bar { fill: var(--slate); } .flowart .bar.win { fill: var(--w-g); } .flowart .bar.zero { fill: var(--w-x); }
+.flowart .up { fill: var(--w-g); } .flowart .down { fill: var(--gold); } .flowart .flat { fill: var(--w-x); }
+.flowart .mean { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 6; }
+.flowart .tok { fill: var(--w-x); } .flowart .tok.model { fill: var(--w-g); }
+.flowart .brace { fill: none; stroke: var(--accent); stroke-width: 2; }
+.flowart .lora { fill: var(--accent); } .flowart .base { fill: var(--ground2); stroke: var(--line); }
+.flowart .ico { fill: none; stroke: var(--slate); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* start */
+#start { grid-template-columns: 1fr 1.15fr; gap: 56px; align-items: center; }
+.start-copy h1 { font-size: 48px; max-width: 14ch; }
+.ctas { display: grid; gap: 16px; }
+@property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.cta { padding: 20px 30px; display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 28px; align-items: center; border: 3px solid transparent;
+  background: linear-gradient(var(--panel), var(--panel)) padding-box, conic-gradient(from var(--a), #CEEB13, #CD881A, #7799B6, #395761, #CEEB13) border-box; animation: spin 4s linear infinite; }
+@keyframes spin { to { --a: 360deg; } }
+.cta:nth-child(2) { animation-delay: -1s; } .cta:nth-child(3) { animation-delay: -2s; } .cta:nth-child(4) { animation-delay: -3s; }
+.cta h2 { font-size: 24px; line-height: 1.15; }
+.cta p { color: var(--muted); font-size: 17px; margin: 6px 0 10px; }
+.cta .url { font-family: var(--font-display); font-size: 16px; white-space: nowrap; }
+.cta.primary h2 { background: var(--accent); color: #000; display: inline; padding: 2px 8px; border-radius: 6px; box-decoration-break: clone; }
+.qr { width: 160px; height: 160px; background: #fff; border-radius: 8px; padding: 6px; } .qr img { width: 100%; height: 100%; display: block; }
+.cta[hidden] { display: none; }
+
+.ctl { position: fixed; top: 106px; right: 56px; display: flex; gap: 10px; z-index: 50; }   /* just below the menu bar */
+.ctl[hidden] { display: none; }
+.ctl-btn { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-display); font-size: 15px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 10px 18px; border-radius: 999px; }
+.ctl-btn:hover { background: rgba(206, 235, 19, .12); }
+.ctl-btn svg { width: 16px; height: 16px; fill: currentColor; }
+body.paused .ctl #ctl-pause { background: var(--accent); color: #000; border-color: var(--accent); }
+body.paused *, body.paused *::before, body.paused *::after { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <img src="assets/logos/crusoe-lockup-white.svg" alt="Crusoe">
+  <div class="product">Crusoe Managed RL <span class="chip">Private Preview</span></div>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="play"><span class="num">1</span>Watch</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="how"><span class="num">2</span>How To Train</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="code"><span class="num">3</span>GRPO Under The Hood</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="start"><span class="num">4</span>Get Started</button>
+  </nav>
+</header>
+<div class="ctl" id="ctl" role="group" aria-label="Animation controls">
+  <button class="ctl-btn" id="ctl-pause" title="Pause (Space)"><svg viewBox="0 0 20 20" id="ctl-pause-ico"><rect x="5" y="4" width="3.5" height="12" rx="1"/><rect x="11.5" y="4" width="3.5" height="12" rx="1"/></svg><span id="ctl-pause-txt">Pause</span></button>
+  <button class="ctl-btn" id="ctl-reset" title="Reset (R)"><svg viewBox="0 0 20 20"><path d="M4.5 10a5.5 5.5 0 1 0 1.8-4.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 3.5v4.5h4.5z"/></svg><span>Reset</span></button>
+</div>
+
+<!-- WATCH (attract loop: games above, the training run replaying below) -->
+<section class="stage active" id="play">
+  <div class="hero">
+    <div class="eyebrow">Crusoe Managed RL</div>
+    <h1>Watch A Model Learn <span class="hl">Wordle</span> With <span class="hl">RL</span> And <span class="hl">GRPO</span>.</h1>
+    <div class="race">
+      <div class="eyebrow">Win Rate As It Trains, Illustrative</div>
+      <div class="rrow base"><span>Base Model</span><div class="tiles" id="rt-base"></div><b id="rn-base"></b></div>
+      <div class="rrow sft"><span>After SFT</span><div class="tiles" id="rt-sft"></div><b id="rn-sft"></b></div>
+      <div class="rrow rl"><span>After RL</span><div class="tiles" id="rt-rl"></div><b id="rn-rl"></b></div>
+      <div class="rnote" id="rnote"></div>
+    </div>
+  </div>
+  <div class="arena">
+    <div class="now"><span class="k" id="now-k">Secret Word</span><span class="w" id="now-w"></span></div>
+    <div class="boards">
+      <div class="board" data-model="base"><div class="who"><h2>Base Model</h2></div><div class="grid"></div><div class="outcome"></div></div>
+      <div class="board" data-model="sft"><div class="who"><h2>After SFT</h2></div><div class="grid"></div><div class="outcome"></div></div>
+      <div class="board rl" data-model="rl"><div class="badge"><span>New Launch, Crusoe Managed RL</span></div><div class="who"><h2>After RL</h2></div><div class="grid"></div><div class="outcome"></div></div>
+    </div>
+    <div class="readout-row"><span class="readout" id="w-step">Replaying The Run</span></div>
+    <div class="strip">
+      <div class="chart card">
+        <div><h2>With SFT</h2><div class="sub">Loss Per Token, 40 Steps</div></div>
+        <svg id="w-sft" viewBox="0 0 640 300" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="chart card">
+        <div class="bar-head"><div><h2>With GRPO</h2><div class="sub">Base, SFT, Then 60 GRPO Steps</div></div>
+          <div class="legend"><span><i style="background:var(--accent)"></i>Win Rate</span><span><i style="background:var(--slate)"></i>Avg Reward</span></div></div>
+        <svg id="w-grpo" viewBox="0 0 960 300" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW TO TRAIN: built one component at a time -->
+<section class="stage" id="how">
+  <div class="head center"><h1>RL Post-Training With GRPO</h1></div>
+  <div class="diagram">
+    <svg viewBox="0 0 1600 700" preserveAspectRatio="xMidYMid meet" aria-label="Your side and Crusoe Cloud in a Managed RL training run">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#fff"/></marker>
+        <marker id="arr-slate" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#7799B6"/></marker>
+        <marker id="arr-on" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#CEEB13"/></marker>
+        <linearGradient id="gpu-ring" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#CEEB13"/><stop offset=".33" stop-color="#CD881A"/><stop offset=".66" stop-color="#7799B6"/><stop offset="1" stop-color="#CEEB13"/>
+          <animateTransform attributeName="gradientTransform" type="rotate" values="0 .5 .5;360 .5 .5" dur="4s" repeatCount="indefinite"/>
+        </linearGradient>
+      </defs>
+
+      <!-- your side -->
+      <g class="rv" id="r-side">
+        <rect class="tab-bg" x="40" y="36" width="170" height="36" rx="12"/>
+        <text class="t-tab" x="125" y="60" text-anchor="middle">Your Side</text>
+        <rect class="ground" x="20" y="70" width="560" height="610" rx="22"/>
+        <g class="icon" transform="translate(52 94)" style="stroke-width:2.6">
+          <rect x="6" y="6" width="100" height="62" rx="5"/>
+          <path d="M-6 76h124l8 12H-14z"/>
+          <path class="typing" d="M22 22h44M22 36h30M22 50h54"/>
+        </g>
+        <text class="t-title" x="190" y="146">You Write The Loop</text>
+      </g>
+      <g class="rv" id="r-model"><g id="d-model" transform="translate(52 206)">
+        <rect class="box" x="0" y="0" width="496" height="60" rx="12"/>
+        <circle class="nb" cx="0" cy="0" r="17"/><text class="nt" x="0" y="6" text-anchor="middle">1</text>
+        <path class="icon" d="M38 14l14 8v16l-14 8-14-8V22z M38 22v16 M30 26l8 4 8-4"/>
+        <text class="t-name" x="74" y="38">Pick A Model</text>
+        <text class="t-small" x="480" y="36" text-anchor="end">Qwen3.8-27B</text>
+      </g></g>
+      <g class="rv" id="r-data"><g id="d-data" transform="translate(52 282)">
+        <rect class="box" x="0" y="0" width="496" height="60" rx="12"/>
+        <circle class="nb" cx="0" cy="0" r="17"/><text class="nt" x="0" y="6" text-anchor="middle">2</text>
+        <path class="icon" d="M24 14h28v32H24z M24 24h28 M24 34h28 M38 14v32"/>
+        <text class="t-name" x="74" y="38">Your Data</text>
+        <text class="t-small" x="480" y="36" text-anchor="end">951 Games</text>
+      </g></g>
+      <g class="rv" id="r-reward"><g id="d-reward" transform="translate(52 358)">
+        <rect class="box" x="0" y="0" width="496" height="60" rx="12"/>
+        <circle class="nb" cx="0" cy="0" r="17"/><text class="nt" x="0" y="6" text-anchor="middle">3</text>
+        <path class="icon" d="M28 12h20v10a10 10 0 0 1-20 0z M28 15h-6a5 5 0 0 0 6 7 M48 15h6a5 5 0 0 1-6 7 M38 32v8 M31 44h14"/>
+        <text class="t-name" x="74" y="38">Your Reward</text>
+        <text class="t-small" x="480" y="26" text-anchor="end">Won = 1, Illegal = 0</text>
+        <text class="t-small" x="480" y="46" text-anchor="end">Else Partial Credit</text>
+      </g></g>
+      <g class="rv" id="r-loop"><g id="d-loop" transform="translate(52 440)">
+        <rect class="box strong" x="0" y="0" width="496" height="206" rx="12"/>
+        <circle class="nb" cx="0" cy="0" r="17"/><text class="nt" x="0" y="6" text-anchor="middle">4</text>
+        <text class="t-name" x="26" y="38" style="font-size:20px">Your Training Loop</text>
+        <rect class="hlr" id="d-h1" x="16" y="76" width="464" height="30" rx="6"/>
+        <rect class="hlr" id="d-h2" x="16" y="106" width="464" height="30" rx="6"/>
+        <rect class="hlr" id="d-h3" x="16" y="136" width="464" height="30" rx="6"/>
+        <rect class="hlr" id="d-h4" x="16" y="166" width="464" height="30" rx="6"/>
+        <text class="t-code" x="26" y="68"><tspan class="kw">for</tspan> step <tspan class="kw">in</tspan> <tspan class="fn">range</tspan>(60):</text>
+        <text class="t-code" x="26" y="98">    games   = <tspan class="fn">play</tspan>(sampler, words)</text>
+        <text class="t-code" x="26" y="128">    reward  = <tspan class="fn">score</tspan>(games)</text>
+        <text class="t-code" x="26" y="158">    adv     = <tspan class="fn">compare</tspan>(reward)</text>
+        <text class="t-code" x="26" y="188">    sampler = <tspan class="fn">train</tspan>(games, adv)</text>
+      </g></g>
+
+      <!-- crusoe cloud (ground before arrows, so the arrows paint on top) -->
+      <g class="rv" id="r-cloud">
+        <rect class="tab-bg cloud" x="840" y="36" width="200" height="36" rx="12"/>
+        <text class="t-tab" x="940" y="60" text-anchor="middle">Crusoe Cloud</text>
+        <rect class="ground cloud" x="820" y="70" width="760" height="610" rx="22"/>
+        <image href="assets/logos/crusoe-burst-white.png" x="852" y="100" width="48" height="48"/>
+        <text class="t-title" x="916" y="136">Crusoe Managed RL</text>
+      </g>
+
+      <!-- the SDK -->
+      <g class="rv" id="r-sdk"><g id="d-sdk" class="pill">
+        <rect class="box accent" x="596" y="88" width="208" height="70" rx="20"/>
+        <text class="t-call" x="700" y="116" text-anchor="middle" style="fill:#000">Python SDK</text>
+        <text class="t-small" x="700" y="140" text-anchor="middle" style="fill:#3E4A00">Tinker API Compatible</text>
+      </g></g>
+
+      <g class="rv" id="r-gpus"><g id="d-gpus" transform="translate(852 556)">
+        <rect class="box" x="0" y="0" width="696" height="104" rx="14"/>
+        <text class="t-eyebrow" x="24" y="40">Per Session</text>
+        <text class="t-name" x="24" y="78" style="font-size:28px">GPUs</text>
+        <g transform="translate(180 30)">
+          <g><rect class="icon" x="0" y="4" width="46" height="32" rx="5"/><rect class="icon" x="11" y="13" width="24" height="14" rx="2"/><path class="icon" d="M9 4V0M19 4V0M29 4V0M39 4V0M9 36v4M19 36v4M29 36v4M39 36v4"/><circle class="gpu-dot" cx="40" cy="10" r="3.5"/></g>
+          <g transform="translate(62 0)"><rect class="icon" x="0" y="4" width="46" height="32" rx="5"/><rect class="icon" x="11" y="13" width="24" height="14" rx="2"/><path class="icon" d="M9 4V0M19 4V0M29 4V0M39 4V0M9 36v4M19 36v4M29 36v4M39 36v4"/><circle class="gpu-dot" cx="40" cy="10" r="3.5"/></g>
+          <g transform="translate(124 0)"><rect class="icon" x="0" y="4" width="46" height="32" rx="5"/><rect class="icon" x="11" y="13" width="24" height="14" rx="2"/><path class="icon" d="M9 4V0M19 4V0M29 4V0M39 4V0M9 36v4M19 36v4M29 36v4M39 36v4"/><circle class="gpu-dot" cx="40" cy="10" r="3.5"/></g>
+          <g transform="translate(186 0)"><rect class="icon" x="0" y="4" width="46" height="32" rx="5"/><rect class="icon" x="11" y="13" width="24" height="14" rx="2"/><path class="icon" d="M9 4V0M19 4V0M29 4V0M39 4V0M9 36v4M19 36v4M29 36v4M39 36v4"/><circle class="gpu-dot" cx="40" cy="10" r="3.5"/></g>
+        </g>
+        <line x1="440" y1="22" x2="440" y2="82" style="stroke:var(--line);stroke-width:1.5"/>
+        <rect x="464" y="28" width="48" height="48" rx="10" style="fill:#fff"/>
+        <image href="assets/logos/qwen-color.svg" x="470" y="34" width="36" height="36"/>
+        <text class="t-small" x="528" y="46">Serving</text>
+        <text class="t-name" x="528" y="76" style="font-size:20px">Qwen3.8-27B</text>
+      </g></g>
+
+      <g class="rv" id="r-sample">
+        <path id="d-a-sample" class="arrow" d="M580 490 H 660 V 236 H 830"/>
+        <text class="t-call" x="690" y="222">sample()</text>
+      </g>
+      <g class="rv" id="r-sampler">
+        <path class="pwr" d="M1204 290 H 1236 V 552"/><circle class="pwr-dot" cx="1236" cy="556" r="5"/><g id="d-sampler" transform="translate(852 176)">
+        <rect class="box" x="0" y="0" width="352" height="130" rx="14"/>
+        <text class="t-eyebrow" x="24" y="36">Rollouts</text>
+        <text class="t-name" x="24" y="72" style="font-size:28px">Sampler</text>
+        <text class="t-small" x="24" y="106">128 Games At Once</text>
+        <g class="mini" transform="translate(252 25)">
+          <rect x="0" y="0" width="24" height="24" rx="3" class="g"/><rect x="28" y="0" width="24" height="24" rx="3"/><rect x="56" y="0" width="24" height="24" rx="3" class="y"/>
+          <rect x="0" y="28" width="24" height="24" rx="3"/><rect x="28" y="28" width="24" height="24" rx="3" class="g"/><rect x="56" y="28" width="24" height="24" rx="3" class="g"/>
+          <rect x="0" y="56" width="24" height="24" rx="3" class="y"/><rect x="28" y="56" width="24" height="24" rx="3" class="g"/><rect x="56" y="56" width="24" height="24" rx="3"/>
+        </g>
+      </g></g>
+      <g class="rv" id="r-back">
+        <path id="d-a-back" class="arrow back" d="M850 280 H 720 V 545 H 606"/>
+        <text class="t-small" x="596" y="574">Tokens, Logprobs</text>
+      </g>
+      <g class="rv" id="r-train">
+        <path id="d-a-train" class="arrow" d="M580 625 H 772 V 461 H 830"/>
+        <text class="t-call" x="596" y="652" style="font-size:14px">forward_backward()</text>
+        <text class="t-call" x="596" y="672" style="font-size:14px">optim_step()</text>
+      </g>
+      <g class="rv" id="r-trainer">
+        <path class="pwr" d="M1204 461 H 1236"/><path class="pwr" d="M1028 526 V 552"/><circle class="pwr-dot" cx="1028" cy="556" r="5"/><g id="d-trainer" transform="translate(852 396)">
+        <rect class="box" x="0" y="0" width="352" height="130" rx="14"/>
+        <text class="t-eyebrow" x="24" y="36">Policy Updates</text>
+        <text class="t-name" x="24" y="72" style="font-size:28px">Trainer</text>
+        <text class="t-small" x="24" y="106">LoRA, Base Frozen</text>
+        <path class="icon" d="M256 26 V 104 H 336"/>
+        <path class="icon loss-icon" d="M266 36 C 280 50, 286 86, 330 94"/>
+      </g></g>
+      <g class="rv" id="r-weights">
+        <path id="d-a-weights" class="arrow" d="M870 392 V 326"/>
+                <text class="t-call" x="1028" y="346" text-anchor="middle" style="font-size:11px">save_weights_and_get_sampling_client()</text>
+        <text class="t-small" x="1028" y="368" text-anchor="middle">New Weights To The Sampler</text>
+      </g>
+      <g class="rv" id="r-save">
+        <path id="d-a-ckpt" class="arrow" d="M1208 428 H 1340 V 322"/>
+        <text class="t-small" x="1352" y="392">Save</text>
+      </g>
+      <g class="rv" id="r-ckpt">
+        <path class="pwr" d="M1416 306 V 552"/><circle class="pwr-dot" cx="1416" cy="556" r="5"/><g id="d-ckpt" transform="translate(1284 176)">
+        <rect class="box" x="0" y="0" width="264" height="130" rx="14"/>
+        <text class="t-eyebrow" x="24" y="36">Yours To Keep</text>
+        <text class="t-name" x="24" y="72" style="font-size:28px">Checkpoints</text>
+        <text class="t-small" x="24" y="106">mill://… Adapters</text>
+        <g transform="translate(70 66) scale(0.68)"><g class="ckpt-icon"><path class="icon" d="M198 36h32l10 10v34h-42z M206 36v12h18v-12 M206 80v-14h24v14"/></g></g>
+      </g></g>
+      </g></g>
+    </svg>
+  </div>
+</section>
+
+<!-- GRPO UNDER THE HOOD: one training step, six stations, no code -->
+<section class="stage" id="code">
+  <div class="head center">
+    <div class="eyebrow">One GRPO Training Step, Repeated 60 Times</div>
+    <h1>GRPO Under The Hood</h1>
+    <div class="wherekey"><span class="k local">Your Side</span><span class="k cloud">Crusoe Cloud</span></div>
+  </div>
+  <div class="flowart"><svg id="flowart" viewBox="0 0 1800 820" preserveAspectRatio="xMidYMid meet" aria-label="The GRPO loop"></svg></div>
+</section>
+
+<!-- GET STARTED -->
+<section class="stage" id="start">
+  <div class="start-copy">
+    <div class="eyebrow">Take It With You</div>
+    <h1>Train Your Own Task On Crusoe Managed RL.</h1>
+  </div>
+  <div class="ctas">
+    <div class="cta card primary" id="cta-preview" hidden>
+      <div>
+        <h2>Request Private Preview Access</h2>
+        <p>Managed RL is free during the private preview.</p>
+        <div class="url" id="preview-url"></div>
+      </div>
+      <div class="qr"><img id="preview-qr" src="assets/qr-preview.svg" alt="QR code to request preview access"></div>
+    </div>
+    <div class="cta card" id="cta-github">
+      <div>
+        <h2>The Code Behind This Demo</h2>
+        <p>Wordle with GRPO. Notebook, script and recipe, plus more examples to start from.</p>
+        <div class="url">github.com/crusoecloud/crusoe-developer-hub</div>
+      </div>
+      <div class="qr"><img src="assets/qr-github.svg" alt="QR code for the Crusoe developer hub"></div>
+    </div>
+    <div class="cta card">
+      <div>
+        <h2>Get Started On Crusoe</h2>
+        <p>Create an account, open a project, run the recipe.</p>
+        <div class="url">console.crusoecloud.com</div>
+      </div>
+      <div class="qr"><img src="assets/qr-console.svg" alt="QR code for the Crusoe console"></div>
+    </div>
+    <div class="cta card">
+      <div>
+        <h2>Join The Developer Community</h2>
+        <p>Questions, recipes and what other teams are training.</p>
+        <div class="url">discord.gg/tRKs5bMyry</div>
+      </div>
+      <div class="qr"><img src="assets/qr-discord.svg" alt="QR code for the Crusoe developer Discord"></div>
+    </div>
+  </div>
+</section>
+
+
+<script src="config.js"></script>
+<script src="data/games.js"></script>
+<script src="data/training.js"></script>
+<script>
+const CFG = Object.assign({ previewUrl: '', idleBackToWatchSeconds: 180 }, window.BOOTH_CONFIG || {});
+let paused = false;
+const sleep = ms => new Promise(r => {   // a timer that stops counting while the page is paused
+  let left = ms, last = performance.now();
+  const tick = () => { const now = performance.now(); if (!paused) left -= now - last; last = now;
+    if (left <= 0) r(); else setTimeout(tick, Math.min(left, 100)); };
+  setTimeout(tick, Math.min(ms, 100));
+});
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const $ = id => document.getElementById(id);
+
+// ── fit the 1920 x 1080 composition to the window, whatever its size ──────
+function fit() { document.body.style.zoom = Math.min(innerWidth / 1920, innerHeight / 1080); }
+fit(); addEventListener('resize', fit);
+
+// ── tabs, staff shortcuts, kiosk ──────────────────────────────────────────
+const tabs = [...document.querySelectorAll('.tab')], stages = document.querySelectorAll('.stage');
+let currentTab = 'play';
+function showTab(name) { currentTab = name; $('ctl').hidden = name === 'start'; if (name === 'start' && paused) togglePause(); tabs.forEach(x => x.setAttribute('aria-selected', x.dataset.tab === name)); stages.forEach(s => s.classList.toggle('active', s.id === name));
+  if (name === 'play') attract.resume(); if (name === 'how') howTour.start(); else howTour.stop(); if (name === 'code') gTour.start(); else gTour.stop(); }
+tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+let idle = 0;
+['pointerdown', 'keydown', 'pointermove'].forEach(ev => document.addEventListener(ev, () => { idle = 0; document.body.classList.remove('nocursor'); }));
+setInterval(() => { idle++; if (idle > 8) document.body.classList.add('nocursor');
+  if (!paused && idle >= CFG.idleBackToWatchSeconds && currentTab !== 'play') showTab('play'); }, 1000);
+// Pause freezes every timer, CSS animation and SVG animation; Reset restarts the current page.
+function togglePause() {
+  paused = !paused; document.body.classList.toggle('paused', paused);
+  document.querySelectorAll('svg').forEach(v => paused ? v.pauseAnimations() : v.unpauseAnimations());
+  $('ctl-pause-txt').textContent = paused ? 'Play' : 'Pause';
+  $('ctl-pause-ico').innerHTML = paused ? '<path d="M6 4l10 6-10 6z"/>' : '<rect x="5" y="4" width="3.5" height="12" rx="1"/><rect x="11.5" y="4" width="3.5" height="12" rx="1"/>';
+}
+function resetTab() {
+  if (currentTab === 'play') { attract.restart(); charts.restart(); }
+  if (currentTab === 'how') howTour.start();
+  if (currentTab === 'code') gTour.start();
+  document.getAnimations().forEach(a => { try { a.currentTime = 0; } catch {} });   // borders, glows, flowing arrows
+}
+$('ctl-pause').addEventListener('click', togglePause);
+$('ctl-reset').addEventListener('click', resetTab);
+document.addEventListener('keydown', e => {
+  const map = { '1': 'play', '2': 'how', '3': 'code', '4': 'start' };
+  if (map[e.key]) showTab(map[e.key]);
+  if (e.key === 'Escape') showTab('play');
+  if (e.key === 'r' || e.key === 'R') resetTab();
+  if (e.key === ' ') { e.preventDefault(); togglePause(); }
+  if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.().catch(() => {});
+});
+if ('wakeLock' in navigator) { const keep = () => navigator.wakeLock.request('screen').catch(() => {}); keep(); document.addEventListener('visibilitychange', () => { if (!document.hidden) keep(); }); }
+
+// ── watch: continuous rounds of real recorded games ───────────────────────
+// Every board is a real evaluation game. The RL board shows a winning game whenever the RL
+// model recorded one on that word, the base board a losing one whenever the base model
+// recorded one, and the SFT board a random one. The "Won N Of 5 Games" chips are unfiltered.
+const DATA = window.WORDLE_DATA, SECRETS = DATA.meta.held_out, MODELS = ['base', 'sft', 'rl'];
+const boardEl = m => document.querySelector(`.board[data-model="${m}"]`);
+function emptyGrid(el) { el.innerHTML = ''; for (let r = 0; r < 6; r++) { const row = document.createElement('div'); row.className = 'row'; for (let c = 0; c < 5; c++) { const t = document.createElement('div'); t.className = 'tile'; row.appendChild(t); } el.appendChild(row); } }
+function clearBoards() { for (const m of MODELS) { const b = boardEl(m); b.classList.remove('won'); emptyGrid(b.querySelector('.grid')); const o = b.querySelector('.outcome'); o.textContent = ''; o.className = 'outcome'; } }
+function outcomeText(g) { return g.won ? `Won In ${g.board.length}` : 'Lost'; }
+async function showGame(m, g, token) {
+  const b = boardEl(m), grid = b.querySelector('.grid');
+  for (let r = 0; r < g.board.length; r++) { const tiles = grid.children[r].children;
+    for (let c = 0; c < 5; c++) { tiles[c].textContent = g.board[r].word[c]; tiles[c].classList.add(g.board[r].fb[c]); }
+    await sleep(110); if (attract.token !== token) return; }
+  const o = b.querySelector('.outcome'); o.textContent = outcomeText(g); o.classList.toggle('won', g.won); b.classList.toggle('won', g.won);
+}
+function chooseGame(m, games) {
+  if (m === 'rl') { const wins = games.filter(g => g.won); if (wins.length) return pick(wins); }
+  if (m === 'base') { const losses = games.filter(g => !g.won); if (losses.length) return pick(losses); }
+  return pick(games);
+}
+// Words come from a shuffled bag, so no word repeats until all 20 have played. The RL model has
+// a recorded win on 17 of them, so its board wins about 85% of the time.
+let bag = [];
+const nextWord = () => { if (!bag.length) bag = [...SECRETS].sort(() => Math.random() - .5); return bag.pop(); };
+const attract = {
+  token: null,
+  async round() {   // one endless stream of words, no rounds
+    const token = this.token = {};
+    while (this.token === token) {
+      const w = nextWord(); clearBoards();
+      $('now-w').textContent = w.toUpperCase();
+      const chosen = {};
+      for (const m of MODELS) { chosen[m] = chooseGame(m, DATA.games[w][m]); }
+      await Promise.all(MODELS.map(m => showGame(m, chosen[m], token))); if (this.token !== token) return;
+      await sleep(2200);
+    }
+  },
+  restart() { this.round(); },
+  resume() { if (!this.token) this.round(); },
+  stop() { this.token = null; },
+};
+attract.round();
+
+// ── the training story: SFT loss (real) and an illustrative win-rate / reward curve ──
+// The hero tiles and the With GRPO chart follow one illustrative curve (base 2%, SFT 22%,
+// RL 58% wins); the label on the hero says so. The SFT loss curve is the real run.
+// Shape taken from the latest Qwen3.8-27B run's held-out evaluations (SFT 37%, then 46, 48, 52,
+// 48, 53, 52% at steps 10 to 60; reward .653 then .718 .712 .736 .723 .741 .743), rescaled to the
+// booth's range. Jagged step to step, upward overall.
+const ILL = { win: { base: .02, g: [.22, .43, .47, .57, .48, .59, .57] }, rew: { base: .20, g: [.45, .70, .68, .77, .72, .79, .80] } };
+const gAt = (arr, s) => { const i = Math.min(5, Math.floor(s / 10)), f = (s - i * 10) / 10; return arr[i] + (arr[i + 1] - arr[i]) * f; };
+const T = window.TRAINING;
+function svgEl(n, a, txt) { const e = document.createElementNS('http://www.w3.org/2000/svg', n); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; }
+function axes(svg, W, H, pad, xTicks, yTicks, xLabel) {
+  svg.innerHTML = '';
+  svg.appendChild(svgEl('line', { x1: pad.l, y1: H - pad.b, x2: W - pad.r, y2: H - pad.b, class: 'axis' }));
+  svg.appendChild(svgEl('line', { x1: pad.l, y1: pad.t, x2: pad.l, y2: H - pad.b, class: 'axis' }));
+  for (const [x, label] of xTicks) svg.appendChild(svgEl('text', { x, y: H - pad.b + 22, class: 'tick', 'text-anchor': 'middle' }, label));
+  for (const [y, label] of yTicks) { svg.appendChild(svgEl('text', { x: pad.l - 10, y: y + 4, class: 'tick', 'text-anchor': 'end' }, label));
+    svg.appendChild(svgEl('line', { x1: pad.l, y1: y, x2: W - pad.r, y2: y, class: 'axis', 'stroke-dasharray': '2 6' })); }
+  if (xLabel) svg.appendChild(svgEl('text', { x: W - pad.r, y: H - 6, class: 'lbl', 'text-anchor': 'end' }, xLabel));
+}
+const line = (pts, cls) => svgEl('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ' ' + p[1]).join(' '), class: cls });
+const viewBox = svg => svg.getAttribute('viewBox').split(' ').map(Number);
+function drawSFT(progress, svg) {
+  const [, , W, H] = viewBox(svg), pad = { l: 60, r: 24, t: 24, b: 44 };
+  const xs = s => pad.l + (s - 1) / 39 * (W - pad.l - pad.r), ys = v => H - pad.b - (v - 0.08) / (0.25 - 0.08) * (H - pad.t - pad.b);
+  axes(svg, W, H, pad, [[xs(1), '1'], [xs(10), '10'], [xs(20), '20'], [xs(30), '30'], [xs(40), '40']], [[ys(0.10), '0.10'], [ys(0.15), '0.15'], [ys(0.20), '0.20']], 'SFT STEP');
+  const pts = T.sft.slice(0, Math.max(1, Math.round(progress * T.sft.length)));
+  svg.appendChild(line(pts.map(p => [xs(p.step), ys(p.loss)]), 'loss'));
+  const last = pts[pts.length - 1];
+  svg.appendChild(svgEl('circle', { cx: xs(last.step), cy: ys(last.loss), r: 6, class: 'dot', style: 'stroke:var(--gold)' }));
+  svg.appendChild(svgEl('text', { x: xs(last.step) + (last.step > 30 ? -12 : 12), y: ys(last.loss) - 12, class: 'val', 'text-anchor': last.step > 30 ? 'end' : 'start' }, 'Loss ' + last.loss.toFixed(3)));
+}
+// With GRPO: x is Base, SFT, then GRPO steps 10 to 60; two series, win rate and average reward.
+function drawCompare(phase, p, svg) {
+  const [, , W, H] = viewBox(svg), pad = { l: 60, r: 60, t: 30, b: 44 };
+  const xs = i => pad.l + 24 + i / 7 * (W - pad.l - pad.r - 24), ys = v => H - pad.b - v * (H - pad.t - pad.b);
+  axes(svg, W, H, pad, ['Base', 'SFT', '10', '20', '30', '40', '50', '60'].map((t, i) => [xs(i), t]), [[ys(.25), '25%'], [ys(.5), '50%'], [ys(.75), '75%'], [ys(1), '100%']], 'GRPO STEP');
+  svg.insertBefore(svgEl('rect', { class: 'band', x: pad.l + 1, y: pad.t, width: xs(1.5) - pad.l, height: H - pad.t - pad.b }), svg.firstChild);
+  svg.appendChild(svgEl('text', { class: 'bandlbl', x: (pad.l + xs(1.5)) / 2, y: pad.t + 14, 'text-anchor': 'middle' }, 'BEFORE GRPO'));
+  for (const key of ['rew', 'win']) {
+    const S = ILL[key]; let pts;
+    if (phase === 'base') pts = [[0, S.base]];
+    else if (phase === 'sft') pts = [[0, S.base], [p, S.base + (S.g[0] - S.base) * p]];
+    else if (phase === 'grpo') pts = [[0, S.base], [1, S.g[0]], ...S.g.slice(1).map((v, k) => [2 + k, v]).filter(q => q[0] - 1 <= p / 10), [1 + p / 10, gAt(S.g, p)]];
+    else pts = [[0, S.base], [1, S.g[0]], ...S.g.slice(1).map((v, k) => [2 + k, v])];
+    const XY = pts.map(([i, v]) => [xs(i), ys(v)]);
+    if (XY.length > 1) svg.appendChild(line(XY, key));
+    const ticks = pts.filter(([i]) => Number.isInteger(i));
+    for (const [i, v] of ticks) svg.appendChild(svgEl('circle', { cx: xs(i), cy: ys(v), r: 5.5, class: 'dot' + (key === 'rew' ? ' rew' : '') }));
+    const tip = pts[pts.length - 1];
+    svg.appendChild(svgEl('circle', { cx: xs(tip[0]), cy: ys(tip[1]), r: 8, class: 'dot', style: `fill:${key === 'win' ? 'var(--accent)' : 'var(--slate)'};stroke:#fff` }));
+    const labels = key === 'win' ? [pts[0], ...(phase === 'base' ? [] : [[1, S.g[0]]].filter(() => phase !== 'sft')), tip] : [tip];
+    const seen = new Set();
+    for (const [i, v] of labels) { const k = i.toFixed(2); if (seen.has(k)) continue; seen.add(k);
+      const side = key === 'win' && i < 2;   // base and SFT labels sit above-left of their point, where the chart is empty
+      svg.appendChild(svgEl('text', { x: xs(i) + (side ? -12 : 0), y: ys(v) + (side ? -10 : -14), class: 'val ' + key, 'text-anchor': side ? 'end' : 'middle' }, Math.round(v * 100) + '%')); }
+  }
+}
+
+// Hero: ten Wordle tiles per model, filling as the run plays.
+for (const m of MODELS) { const t = $('rt-' + m); for (let i = 0; i < 10; i++) t.appendChild(document.createElement('i')); }
+function setRow(m, rate, on = true) {
+  document.querySelector('.rrow.' + m).classList.toggle('off', !on);
+  $('rn-' + m).textContent = rate == null ? '' : Math.round(rate * 100) + '%';
+  const tiles = $('rt-' + m).children, v = (rate || 0) * 10;
+  for (let i = 0; i < 10; i++) tiles[i].className = i + 1 <= v ? 'G' : (v - i >= .5 ? 'Y' : '');
+}
+function heroTick(phase, p) {
+  if (phase === 'base') { setRow('base', ILL.win.base); setRow('sft', null, false); setRow('rl', null, false); $('rnote').textContent = 'Before Training'; }
+  if (phase === 'sft')  { setRow('sft', ILL.win.base + (ILL.win.g[0] - ILL.win.base) * p); setRow('rl', null, false); $('rnote').textContent = 'Supervised Warm-Up'; }
+  if (phase === 'grpo') { setRow('sft', ILL.win.g[0]); setRow('rl', gAt(ILL.win.g, p)); $('rnote').textContent = `GRPO Step ${p} Of 60`; }
+  if (phase === 'done') { setRow('rl', ILL.win.g[6]); $('rnote').textContent = 'After 60 GRPO Steps'; }
+}
+const wSft = $('w-sft'), wGrpo = $('w-grpo'), wStep = $('w-step');
+const charts = {
+  token: null,
+  restart() { this.run(); },
+  async run() {
+  const tk = this.token = {};
+  while (this.token === tk) {
+    heroTick('base'); drawSFT(0, wSft); drawCompare('base', 0, wGrpo); wStep.textContent = 'Base Model, Before Training'; await sleep(1800);
+    for (let i = 0; i <= 40; i++) { if (this.token !== tk) return; const p = i / 40; drawSFT(p, wSft); drawCompare('sft', p, wGrpo); heroTick('sft', p); wStep.textContent = `SFT Step ${i} Of 40`; await sleep(110); }
+    await sleep(600);
+    for (let s = 0; s <= 60; s++) { if (this.token !== tk) return; drawCompare('grpo', s, wGrpo); heroTick('grpo', s); wStep.textContent = `GRPO Step ${s} Of 60`; await sleep(s && s % 10 === 0 ? 900 : 220); }
+    drawCompare('done', 1, wGrpo); heroTick('done'); wStep.textContent = 'Run Complete, 57% Wins, Peak 59%'; await sleep(7000);
+  }
+  },
+};
+charts.run();
+
+// ── how to train: one component at a time, in the order the data flows ───
+const HOW = [
+  { show: ['r-side', 'r-cloud', 'r-sdk'] },                         // the three places, from the first frame
+  { show: ['r-model', 'r-gpus'], on: ['d-model', 'd-gpus'] },   // picking a model is what allocates the GPUs
+  { show: ['r-data'],    on: ['d-data'] },
+  { show: ['r-reward'],  on: ['d-reward'] },
+  { show: ['r-loop'],    on: ['d-loop'] },
+  { show: ['r-sample', 'r-sampler'],  on: ['d-a-sample', 'd-sampler', 'd-h1'] },
+  { show: ['r-back'],                on: ['d-a-back', 'd-h1'] },
+  {                                  on: ['d-h2', 'd-h3', 'd-reward'] },
+  { show: ['r-train', 'r-trainer'],  on: ['d-a-train', 'd-trainer', 'd-h4'] },
+  { show: ['r-weights'],             on: ['d-a-weights', 'd-sampler'] },
+  { show: ['r-save', 'r-ckpt'],      on: ['d-a-ckpt', 'd-ckpt'] },
+];
+const howTour = {
+  token: null,
+  clearOn() { document.querySelectorAll('#how .on').forEach(e => e.classList.remove('on')); },
+  apply(k) { this.clearOn(); for (let j = 0; j <= k; j++) for (const id of HOW[j].show || []) $(id).classList.add('in'); for (const id of HOW[k].on || []) $(id).classList.add('on'); },
+  async start() {
+    const tk = this.token = {};
+    while (this.token === tk) {
+      document.querySelectorAll('#how .rv').forEach(e => e.classList.remove('in')); this.clearOn(); await sleep(800);
+      for (let k = 0; k < HOW.length; k++) { if (this.token !== tk) return; this.apply(k); await sleep(2100); }
+      this.clearOn(); await sleep(5000);
+    }
+  },
+  stop() { this.token = null; },
+};
+
+// ── grpo under the hood: six illustrated stations ─────────────────────────
+const R = [1.0, 0.3, 0.0, 0.3, 1.0, 0.0, 0.4, 0.2], MEAN = 0.40, STD = 0.39, ADV = R.map(r => (r - MEAN) / STD);
+const WORDS = ['plane', 'glory', 'swung', 'tread', 'mucus', 'drift', 'covet', 'spiel'];
+const miniBoard = (x, y, pat) => `<g transform="translate(${x} ${y})">` + pat.map((row, r) => [...row].map((c, i) => `<rect class="t${c}" x="${i * 15}" y="${r * 15}" width="13" height="13" rx="2"/>`).join('')).join('') + `</g>`;
+const ART = {
+  words: `<g transform="translate(0 6)">${WORDS.map((w, i) => `<rect class="wchip" x="${(i % 4) * 112}" y="${Math.floor(i / 4) * 50}" width="100" height="38" rx="6"/><text class="wtxt" x="${(i % 4) * 112 + 50}" y="${Math.floor(i / 4) * 50 + 25}" text-anchor="middle">${w}</text>`).join('')}</g>`,
+  play: [['XXGXY', 'YXGXX', 'GGGGG'], ['XYXXX', 'XXYGX', 'XGXGY'], ['GXXXX', 'GGXXG', 'GGGGG'], ['XXXYX', 'YYXXX', 'XXGYX'], ['GYXXX', 'GGGGG'], ['XXXXG', 'XGXYG', 'GGGGG']].map((p, i) => miniBoard(i * 76, 8, p)).join('') +
+        `<text class="st-small" x="0" y="96">Same Word, 8 Games, Temperature 1.0, So They Differ</text>`,
+  // values sit under the baseline so they never touch the dashed mean line
+  score: R.map((r, i) => `<rect class="bar ${r >= 1 ? 'win' : r === 0 ? 'zero' : ''}" x="${i * 56}" y="${80 - r * 74}" width="36" height="${Math.max(3, r * 74)}" rx="3"/><text class="st-val" x="${i * 56 + 18}" y="98" text-anchor="middle">${r.toFixed(1)}</text>`).join('') +
+         `<line class="mean" x1="-6" y1="${80 - MEAN * 74}" x2="450" y2="${80 - MEAN * 74}"/><text class="st-small" x="446" y="124" text-anchor="end" style="fill:var(--accent)">Dashed Line, Group Mean 0.40</text>`,
+  compare: ADV.map((a, i) => `<rect class="${a > 0.05 ? 'up' : a < -0.05 ? 'down' : 'flat'}" x="${i * 56}" y="${a > 0 ? 66 - a * 28 : 66}" width="36" height="${Math.max(3, Math.abs(a) * 28)}" rx="3"/><text class="st-val" x="${i * 56 + 18}" y="${a > 0.05 ? 58 - a * 28 : 84 + Math.max(0, -a) * 28}" text-anchor="middle">${a >= 0 ? '+' : ''}${a.toFixed(1)}</text>`).join('') +
+           `<line class="mean" x1="-6" y1="66" x2="450" y2="66"/><text class="st-small" x="446" y="134" text-anchor="end" style="fill:var(--accent)">Above The Mean Up, Below It Down</text>`,
+  train: `<text class="st-small" x="0" y="14">One Turn Of A Won Game</text>` +
+         [...Array(6)].map((_, i) => `<rect class="tok" x="${i * 30}" y="26" width="26" height="26" rx="3"/>`).join('') + [...Array(9)].map((_, i) => `<rect class="tok model" x="${180 + i * 30}" y="26" width="26" height="26" rx="3"/>`).join('') +
+         `<text class="st-small" x="0" y="80">Prompt, 0</text><text class="st-small" x="180" y="80" style="fill:var(--accent)">Model Tokens, Advantage +1.5</text>` +
+         `<path class="brace" d="M180 58 v6 h266 v-6"/>`,
+  weights: `<rect class="base" x="0" y="10" width="200" height="80" rx="10"/><text class="st-small" x="100" y="44" text-anchor="middle">Base Model</text><text class="st-small" x="100" y="64" text-anchor="middle">Frozen</text>` +
+           `<rect class="lora" x="212" y="33" width="58" height="34" rx="8"/><text class="st-small" x="241" y="55" text-anchor="middle" style="fill:#000;font-weight:700">LoRA</text>` +
+           `<path class="ico" d="M278 50h40" style="stroke:var(--accent);stroke-width:3" marker-end="url(#farr-on)"/>` +
+           `<rect class="wchip" x="330" y="26" width="116" height="48" rx="8"/><text class="st-small" x="388" y="55" text-anchor="middle" style="fill:#fff">Sampler</text>`,
+};
+const STATIONS = [
+  { id: 'g1', where: 'local',  n: 1, title: 'Secret Words', desc: 'Fresh words from the training split.',                 call: '16 words, 8 games each',                 art: ART.words },
+  { id: 'g2', where: 'crusoe', n: 2, title: 'Play',         desc: 'The sampler plays every word 8 times, 6 turns max.',   call: 'sample() per turn, 128 games at once',   art: ART.play },
+  { id: 'g3', where: 'local',  n: 3, title: 'Score',        desc: 'Your reward function. 1 on a win, 0 if illegal.',      call: 'reward = score(game)',                   art: ART.score },
+  { id: 'g4', where: 'local',  n: 4, title: 'Compare',      desc: 'Each game against its 7 siblings. No critic.',         call: 'adv = (reward - mean) / std',            art: ART.compare },
+  { id: 'g5', where: 'crusoe', n: 5, title: 'Train',        desc: 'The advantage is written on the model\'s own tokens.', call: "forward_backward('importance_sampling'), optim_step()", art: ART.train },
+  { id: 'g6', where: 'crusoe', n: 6, title: 'New Weights',  desc: 'Only the LoRA adapter moves. The sampler serves it.',  call: 'save_weights_and_get_sampling_client()', art: ART.weights },
+];
+const GDEFS = `<defs>
+    <marker id="farr" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#6B7174"/></marker>
+    <marker id="farr-on" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#CEEB13"/></marker>
+  </defs>`;
+// Ring: the same six cards, smaller, around one loop; the hub names it.
+function ringStation(s, x, y) {
+  const cloud = s.where === 'crusoe', W = 420, H = 280, k = 0.82;
+  return `<g id="${s.id}" class="gs" transform="translate(${x} ${y})">
+    <rect class="st-bg ${cloud ? 'cloud' : 'local'}" x="0" y="0" width="${W}" height="${H}" rx="18"/>
+    <path class="st-band ${cloud ? 'cloud' : 'local'}" d="M0 18a18 18 0 0 1 18-18h${W - 36}a18 18 0 0 1 18 18v20H0z"/>
+    <text class="st-owner" x="22" y="25">${cloud ? 'Crusoe Cloud' : 'Your Side'}</text>
+    ${cloud ? `<circle class="st-crusoe" cx="${W - 40}" cy="0" r="24"/><image href="assets/logos/crusoe-burst-white.png" x="${W - 57}" y="-17" width="34" height="34"/>` : ''}
+    <circle class="st-n" cx="36" cy="72" r="16"/><text class="st-nt" x="36" y="78" text-anchor="middle">${s.n}</text>
+    <text class="st-title" x="62" y="81" style="font-size:24px">${s.title}</text>
+    <text class="st-desc" x="22" y="112" style="font-size:15px">${s.desc}</text>
+    <g transform="translate(22 128) scale(${k})">${s.art}</g>
+    <text class="st-call" x="22" y="${H - 16}" style="font-size:11px">${s.call.replace(/</g, '&lt;')}</text>
+  </g>`;
+}
+  // One ellipse carries everything: card centres sit on it, and each arrow is the arc of it
+  // between two cards, trimmed where it leaves one card and enters the next.
+  const CX = 900, CY = 410, RX = 840, RY = 242, CW = 420, CH = 280, GAP = 32;
+  const deg = d => d * Math.PI / 180, at = t => [CX + RX * Math.cos(t), CY + RY * Math.sin(t)];
+  const ANG = { g1: deg(-130), g2: deg(-90), g3: deg(-50), g4: deg(50), g5: deg(90), g6: deg(130) };
+  const POS = {}; for (const id in ANG) { const [x, y] = at(ANG[id]); POS[id] = [x - CW / 2, y - CH / 2]; }
+  const inside = (t, id) => { const [x, y] = at(t), [px, py] = POS[id]; return x > px - GAP && x < px + CW + GAP && y > py - GAP && y < py + CH + GAP; };
+  const edge = (id, dir) => { let t = ANG[id]; while (inside(t, id)) t += dir * 0.002; return t; };
+  const ORDER = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6'];
+  const arc = (i) => { const from = ORDER[i], to = ORDER[(i + 1) % 6];
+    const t0 = edge(from, 1); let t1 = edge(to, -1); if (t1 < t0) t1 += 2 * Math.PI;
+    const [x0, y0] = at(t0), [x1, y1] = at(t1);
+    return `<path id="ga${i + 1}" class="arrow gs" d="M${x0.toFixed(1)} ${y0.toFixed(1)} A ${RX} ${RY} 0 ${t1 - t0 > Math.PI ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`; };
+  $('flowart').innerHTML = GDEFS + `
+  <ellipse cx="${CX}" cy="${CY}" rx="${RX}" ry="${RY}" style="fill:none;stroke:#1E2123;stroke-width:26"/>
+  ${[0, 1, 2, 3, 4, 5].map(arc).join('')}
+  <text class="st-title" x="${CX}" y="${CY - 8}" text-anchor="middle" style="font-size:44px">One Step</text>
+  <text class="alabel" x="${CX}" y="${CY + 32}" text-anchor="middle" style="font-size:16px;letter-spacing:.14em">Repeated 60 Times</text>
+  ${STATIONS.map(st => ringStation(st, ...POS[st.id])).join('')}`;
+const GSTEPS = [['g1', 'ga1'], ['g2', 'ga2'], ['g3', 'ga3'], ['g4', 'ga4'], ['g5', 'ga5'], ['g6', 'ga6']];
+const gTour = {   // build the ring one stage at a time, hold it, start again
+  token: null,
+  async start() {
+    const tk = this.token = {}, all = () => document.querySelectorAll('.flowart .gs');
+    const off = () => document.querySelectorAll('.flowart .on').forEach(e => e.classList.remove('on'));
+    while (this.token === tk) {
+      all().forEach(e => e.classList.remove('in')); off(); await sleep(900);
+      // card 1 alone, then each arrow arrives together with the card it leads into;
+      // the last arrow closes the ring back into card 1
+      for (let i = 0; i <= GSTEPS.length; i++) {
+        if (this.token !== tk) return;
+        off();
+        if (i > 0) $(GSTEPS[i - 1][1]).classList.add('in', 'on');
+        const card = GSTEPS[i % GSTEPS.length][0]; $(card).classList.add('in', 'on');
+        await sleep(2400);
+      }
+      off(); await sleep(8000);
+    }
+  },
+  stop() { this.token = null; document.querySelectorAll('.flowart .gs').forEach(e => e.classList.add('in')); },
+};
+
+// ── get started: the preview card appears once config.js names a URL ──────
+if (CFG.previewUrl) { $('cta-preview').hidden = false; $('preview-url').textContent = CFG.previewUrl.replace(/^https?:\/\//, ''); $('cta-github').classList.remove('primary'); }
+else $('cta-github').classList.add('primary');
+
+// ?tab=play|how|code|start opens a tab directly
+const q = new URLSearchParams(location.search);
+showTab(q.get('tab') || 'play');
+</script>
+</body>
+</html>
